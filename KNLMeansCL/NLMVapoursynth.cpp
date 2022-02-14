@@ -64,6 +64,7 @@ inline void NLMVapoursynth::oclErrorCheck(const char* function, cl_int errcode, 
             }
             break;
     }
+    fprintf(stderr, "oclErrorCheck\n");
     vsapi->freeNode(node);
     vsapi->freeNode(knot);
 }
@@ -73,6 +74,7 @@ inline void NLMVapoursynth::oclErrorCheck(const char* function, cl_int errcode, 
 static void VS_CC VapourSynthPluginViInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core,
     const VSAPI *vsapi)
 {
+    fprintf(stderr, "plugin init\n");
     NLMVapoursynth *d = (NLMVapoursynth*)* instanceData;
     vsapi->setVideoInfo(d->vi, 1, node);
 }
@@ -82,16 +84,25 @@ static void VS_CC VapourSynthPluginViInit(VSMap *in, VSMap *out, void **instance
 static const VSFrameRef *VS_CC VapourSynthPluginGetFrame(int n, int activationReason, void **instanceData,
     void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi)
 {
+  fprintf(stderr, "plugin get frame\n");
     NLMVapoursynth *d = (NLMVapoursynth*)* instanceData;
     int k_start = -min(int64ToIntS(d->d), n);
     int k_end = min(int64ToIntS(d->d), d->vi->numFrames - 1 - n);
+    fprintf(stderr, "activation reason %d for frame %d\n", activationReason, n);
     if (activationReason == arInitial) {
+      fprintf(stderr, "arInitial\n");
         for (int k = k_start; k <= k_end; k++) {
+          fprintf(stderr, "fetching frame %d\n", k);
             vsapi->requestFrameFilter(n + k, d->node, frameCtx);
-            if (d->knot) vsapi->requestFrameFilter(n + k, d->knot, frameCtx);
+            if (d->knot) {
+              fprintf(stderr, "knot frame %d\n", k);
+              vsapi->requestFrameFilter(n + k, d->knot, frameCtx);
+            }
+            fprintf(stderr, "got frame %d\n", k);
         }
     }
     else if (activationReason == arAllFramesReady) {
+      fprintf(stderr, "arAllFramesReady\n");
         // Variables
         const VSFrameRef *src = vsapi->getFrameFilter(n, d->node, frameCtx), *ref;
         const VSFormat *fi = d->vi->format;
@@ -118,7 +129,7 @@ static const VSFrameRef *VS_CC VapourSynthPluginGetFrame(int n, int activationRe
             mrounds(d->idmn[0], d->vrt_block[0]),
             mrounds(d->idmn[1], d->vrt_result * d->vrt_block[1]) / d->vrt_result
         };
-
+        fprintf(stderr, "copy other\n");
         // Copy other
         if (fi->colorFamily != cmGray && (d->clip_t & NLM_CLIP_REF_LUMA)) {
             const VSFrameRef * planeSrc[] = { NULL, src, src };
@@ -135,14 +146,14 @@ static const VSFrameRef *VS_CC VapourSynthPluginGetFrame(int n, int activationRe
             dst = vsapi->newVideoFrame(fi, (int)d->idmn[0], (int)d->idmn[1], src, core);
         }
         vsapi->freeFrame(src);
-
+        fprintf(stderr, "set up buffers\n");
         // Set-up buffers
         cl_int ret = CL_SUCCESS;
         ret |= clEnqueueFillBuffer(d->command_queue, d->mem_U[memU2], &pattern_u2,
             sizeof(cl_float), 0, size_u2, 0, NULL, NULL);
         ret |= clEnqueueFillBuffer(d->command_queue, d->mem_U[memU5], &pattern_u5,
             sizeof(cl_float), 0, size_u5, 0, NULL, NULL);
-
+        fprintf(stderr, "read image\n");
         // Read image
         for (int k = k_start; k <= k_end; k++) {
             src = vsapi->getFrameFilter(n + k, d->node, frameCtx);
@@ -240,7 +251,7 @@ static const VSFrameRef *VS_CC VapourSynthPluginGetFrame(int n, int activationRe
             vsapi->freeFrame(src);
             vsapi->freeFrame(ref);
         }
-
+        fprintf(stderr, "spatio temporal processing\n");
         // Spatio-temporal processing
         for (int k = k_start; k <= 0; k++) {
             for (int j = int64ToIntS(-d->a); j <= d->a; j++) {
@@ -279,7 +290,7 @@ static const VSFrameRef *VS_CC VapourSynthPluginGetFrame(int n, int activationRe
         }
         ret |= clEnqueueNDRangeKernel(d->command_queue, d->kernel[nlmFinish],
             2, NULL, global_work, NULL, 0, NULL, NULL);
-
+        fprintf(stderr, "read and write from OCL\n");
         // Read image from OCL, Write image
         switch (d->clip_t) {
             case (NLM_CLIP_TYPE_UNORM | NLM_CLIP_REF_LUMA):
@@ -334,7 +345,7 @@ static const VSFrameRef *VS_CC VapourSynthPluginGetFrame(int n, int activationRe
                 vsapi->freeFrame(dst);
                 return 0;
         }
-
+        fprintf(stderr, "wait for commands\n");
         // Blocks until commands have completed
         ret |= clFinish(d->command_queue);
         if (ret != CL_SUCCESS) {
@@ -345,6 +356,7 @@ static const VSFrameRef *VS_CC VapourSynthPluginGetFrame(int n, int activationRe
 
         // Info
         if (d->info) {
+          fprintf(stderr, "print info\n");
             uint8_t y = 0, *frm = vsapi->getWritePtr(dst, 0);
             int pitch = vsapi->getStride(dst, 0);
             char buffer[2048], str[2048], str1[2048];
@@ -399,6 +411,7 @@ static const VSFrameRef *VS_CC VapourSynthPluginGetFrame(int n, int activationRe
 // VapourSynthFree
 static void VS_CC VapourSynthPluginFree(void *instanceData, VSCore *core, const VSAPI *vsapi)
 {
+  fprintf(stderr, "plugin free\n");
     NLMVapoursynth *d = (NLMVapoursynth*)instanceData;
     clReleaseCommandQueue(d->command_queue);
     if (d->pre_processing) {
@@ -442,7 +455,7 @@ static void VS_CC VapourSynthPluginFree(void *instanceData, VSCore *core, const 
 static void VS_CC VapourSynthPluginCreate(const VSMap *in, VSMap *out, void *userData, VSCore *core,
     const VSAPI *vsapi)
 {
-
+  fprintf(stderr, "plugin create\n");
     // Check source clip
     NLMVapoursynth d;
     d.node = vsapi->propGetNode(in, "clip", 0, 0);
